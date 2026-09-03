@@ -141,12 +141,68 @@ Item {
     onTriggered: root.fetchSun()
   }
 
+  // ---- manual override ------------------------------------------------------
+  // The panel's manual day/night switch writes a small request file; we apply
+  // it as a temporary override that auto-clears at the next sunrise/sunset
+  // boundary, so the schedule always resumes on its own.
+  property string overridePeriod: ""
+  property int overrideUntil: 0
+  readonly property string manualRequestPath: home + "/.local/state/omarchy/background-lock-manual.json"
+
+  FileView {
+    id: manualFile
+    path: root.manualRequestPath
+    watchChanges: true
+    printErrors: false
+    // Reload on change so onLoaded reads the fresh contents (text() inside
+    // onFileChanged can still be empty for a just-created file).
+    onFileChanged: reload()
+    onLoaded: root.onManualRequest(manualFile.text())
+  }
+
+  function onManualRequest(text) {
+    var r = Model.parseState(text)
+    var period = String(r.period || "")
+    var ts = parseInt(r.ts) || 0
+    // Ignore stale requests (e.g. a leftover file read back at startup).
+    if (period !== "day" && period !== "night") return
+    if (Math.abs(nowEpoch() - ts) > 60) return
+    root.overridePeriod = period
+    root.overrideUntil = nextBoundaryFor(period)
+    tick(true)  // apply the override right away
+  }
+
+  // The moment an override should lapse: switching to day holds until the next
+  // sunset, switching to night until the next sunrise.
+  function nextBoundaryFor(period) {
+    if (!root.sunTimes) return 0
+    var now = nowEpoch()
+    if (period === "day") {
+      var ss = Model.epochToday(root.sunTimes.sunset)
+      return now < ss ? ss : ss + 86400
+    }
+    var sr = Model.epochToday(root.sunTimes.sunrise)
+    return now < sr ? sr : Model.epochTomorrow(root.sunTimes.tomorrowSunrise)
+  }
+
   // ---- scheduling tick ------------------------------------------------------
   // forceApply re-applies the current period even when it did not change
-  // (used after a config edit). Otherwise we only apply on a period flip.
+  // (used after a config edit or a manual override). Otherwise we only apply
+  // on an effective-period flip.
   function tick(forceApply) {
     if (!root.sunTimes) return
-    var s = Model.computeSchedule(root.sunTimes, root.config, nowEpoch())
+    var now = nowEpoch()
+    // Lapse an expired override.
+    if (root.overridePeriod !== "" && now >= root.overrideUntil) {
+      root.overridePeriod = ""
+      root.overrideUntil = 0
+    }
+    var s = Model.computeSchedule(root.sunTimes, root.config, now)
+    // Apply the override on top of the time-based period.
+    if (root.overridePeriod !== "" && root.overridePeriod !== s.period) {
+      s.period = root.overridePeriod
+      s.current_theme = root.overridePeriod === "night" ? root.config.night_theme : root.config.day_theme
+    }
     var changed = s.period !== root.lastAppliedPeriod
     root.schedule = s
     writeState(s)
@@ -269,16 +325,12 @@ Item {
     stateWriter.running = true
   }
 
-  // Generic stdin file writer: streams `content` into the state file.
+  // Writes `content` to the state file, passing it via argv (not stdin — a
+  // stdin pipe would need closing and can leave the process stuck running).
   Process {
     id: stateWriter
     property string content: ""
-    command: ["sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"", "sh", root.statePath]
-    stdinEnabled: true
-    onStarted: {
-      write(stateWriter.content)
-      stdinEnabled = false  // close the pipe -> EOF -> file written
-    }
+    command: ["sh", "-c", "mkdir -p \"$(dirname \"$2\")\" && printf %s \"$1\" > \"$2\"", "w", stateWriter.content, root.statePath]
     onExited: function(code) {
       if (stateWriter.content !== root.pendingStateJson) root.stateWriteTimer.restart()
     }

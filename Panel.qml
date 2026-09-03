@@ -146,7 +146,6 @@ Panel {
       night_wallpaper: root.config.night_wallpaper
     }
     mutator(c)
-    configWriter.filePath = root.configPath
     configWriter.content = Model.buildConfig(c)
     if (!configWriter.running) configWriter.running = true
     // FileView watchChanges reloads the config (and the service re-applies).
@@ -166,46 +165,17 @@ Panel {
   }
 
   // ---- manual switch --------------------------------------------------------
-  // Applies the chosen period's theme + wallpaper right away. The scheduler
-  // service keeps the sunrise/sunset auto-switching (it re-applies on the next
-  // boundary), so a manual switch is temporary by design.
-  property string pendingManualWallpaper: ""
-  property string pendingManualPeriod: ""
+  // Hands a request to the service (via a small file), which applies it as a
+  // temporary override — theme, wallpaper, and background lock all move
+  // together — and resumes the schedule at the next sunrise/sunset boundary.
+  readonly property string manualRequestPath: home + "/.local/state/omarchy/background-lock-manual.json"
 
   function manualDay() { applyManual("day") }
   function manualNight() { applyManual("night") }
 
   function applyManual(period) {
-    if (manualThemeProc.running) return
-    var theme = period === "night" ? root.config.night_theme : root.config.day_theme
-    root.pendingManualWallpaper = period === "night" ? root.config.night_wallpaper : root.config.day_wallpaper
-    root.pendingManualPeriod = period
-    manualThemeProc.command = ["omarchy", "theme", "set", theme]
-    manualThemeProc.running = true
-  }
-
-  function writeManualState() {
-    // Reflect the manual switch in the bar pill immediately, preserving the
-    // sunrise/sunset info from the current schedule. The service overwrites
-    // this with a fully recomputed schedule on its next tick.
-    var base = root.schedule || ({})
-    var s = {
-      sunrise: base.sunrise || "",
-      sunset: base.sunset || "",
-      tomorrow_sunrise: base.tomorrow_sunrise || "",
-      day_theme: root.config.day_theme,
-      night_theme: root.config.night_theme,
-      period: root.pendingManualPeriod,
-      current_theme: root.pendingManualPeriod === "night" ? root.config.night_theme : root.config.day_theme,
-      next_label: base.next_label || "",
-      next_epoch: base.next_epoch || 0,
-      updated: Math.floor(Date.now() / 1000),
-      day_wallpaper: root.config.day_wallpaper,
-      night_wallpaper: root.config.night_wallpaper
-    }
-    manualStateWriter.filePath = root.home + "/.local/state/omarchy/sun-theme-state.json"
-    manualStateWriter.content = Model.buildState(s)
-    if (!manualStateWriter.running) manualStateWriter.running = true
+    manualReqWriter.content = '{"period":"' + period + '","ts":' + Math.floor(Date.now() / 1000) + '}'
+    if (!manualReqWriter.running) manualReqWriter.running = true
   }
 
   KeyboardPanel {
@@ -425,46 +395,19 @@ Panel {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.onNightWallpapersLoaded(text) }
   }
 
-  // Writes the config file; the FileView watch reloads it afterwards.
+  // Writes the config file via argv (no stdin pipe to close); the FileView
+  // watch reloads it afterwards.
   Process {
     id: configWriter
-    property string filePath: ""
     property string content: ""
-    command: ["sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"", "sh", configWriter.filePath]
-    stdinEnabled: true
-    onStarted: {
-      write(configWriter.content)
-      stdinEnabled = false
-    }
+    command: ["sh", "-c", "mkdir -p \"$(dirname \"$2\")\" && printf %s \"$1\" > \"$2\"", "w", configWriter.content, root.configPath]
     onExited: function(code) { configFile.reload() }
   }
 
-  // Manual switch: theme then wallpaper, then reflect in the state file.
+  // Writes the manual-switch request file; the service watches it and applies.
   Process {
-    id: manualThemeProc
-    onExited: function(code) {
-      if (root.pendingManualWallpaper !== "") {
-        manualBgProc.command = ["omarchy", "theme", "bg", "set", root.pendingManualWallpaper]
-        manualBgProc.running = true
-      } else {
-        root.writeManualState()
-      }
-    }
-  }
-  Process {
-    id: manualBgProc
-    onExited: function(code) { root.writeManualState() }
-  }
-
-  Process {
-    id: manualStateWriter
-    property string filePath: ""
+    id: manualReqWriter
     property string content: ""
-    command: ["sh", "-c", "mkdir -p \"$(dirname \"$1\")\" && cat > \"$1\"", "sh", manualStateWriter.filePath]
-    stdinEnabled: true
-    onStarted: {
-      write(manualStateWriter.content)
-      stdinEnabled = false
-    }
+    command: ["sh", "-c", "mkdir -p \"$(dirname \"$2\")\" && printf %s \"$1\" > \"$2\"", "w", manualReqWriter.content, root.manualRequestPath]
   }
 }
