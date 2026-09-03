@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "xiaowei2479.background-lock",
+  "name": "Background Lock",
+  "version": "2.0.0",
+  "author": "xiaowei2479",
+  "description": "Sunrise/sunset theme scheduler with background lock — keeps your chosen wallpaper per period across theme switches",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Background Lock",
+    "description": "Theme schedule and locked background",
+    "category": "Info",
+    "allowMultiple": false
+  }
+}
