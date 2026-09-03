@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "xiaowei2479.background-lock",
   "name": "Background Lock",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "author": "xiaowei2479",
   "description": "Sunrise/sunset theme scheduler with background lock — keeps your chosen wallpaper per period across theme switches",
   "kinds": [
