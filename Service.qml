@@ -34,14 +34,15 @@ Item {
   property var sunTimes: null        // { sunrise, sunset, tomorrowSunrise } in 24h "HH:MM"
   property var schedule: ({})
   property string locationQuery: ""  // wttr.in path segment ("" = IP auto-detect)
+  property bool sunFetched: false    // first fetch waits for the weather location
   property string lastAppliedPeriod: ""
   property bool applyingOwn: false
 
   Component.onCompleted: {
-    // Apply immediately with sane defaults, then refine from wttr.in.
+    // Apply immediately with sane defaults; sun times are refined from wttr.in
+    // once the weather location is known (see onWeather / onWeatherFailed).
     if (!root.sunTimes) root.sunTimes = { sunrise: "06:00", sunset: "18:00", tomorrowSunrise: "06:00" }
     tick(true)
-    fetchSun()
     minuteTimer.start()
     rescanTimer.start()
   }
@@ -79,15 +80,24 @@ Item {
     var w = Model.parseState(text)
     var name = String(w.name || "").trim()
     var query = name ? encodeURIComponent(name) : ""
-    if (query !== root.locationQuery) {
-      root.locationQuery = query
+    var changed = query !== root.locationQuery
+    root.locationQuery = query
+    // Fetch on first location resolution (so the first query already uses the
+    // configured place instead of IP auto-detect) and whenever it changes.
+    if (changed || !root.sunFetched) {
+      root.sunFetched = true
       fetchSun()
     }
   }
 
   // ---- sun times (wttr.in) -------------------------------------------------
+  // If a fetch is requested while one is in flight (e.g. the configured
+  // location arrives right after startup's IP-based fetch), queue a refetch
+  // with the latest location instead of dropping it.
+  property bool sunFetchPending: false
+
   function fetchSun() {
-    if (sunProc.running) return
+    if (sunProc.running) { root.sunFetchPending = true; return }
     sunProc.command = ["curl", "-fsS", "--max-time", "8", "https://wttr.in/" + root.locationQuery + "?format=j1"]
     sunProc.running = true
   }
@@ -100,12 +110,35 @@ Item {
         var parsed = Model.parseWttr(text)
         if (parsed) {
           root.sunTimes = parsed
+          root.sunRetries = 0
         } else if (!root.sunTimes) {
           root.sunTimes = { sunrise: "06:00", sunset: "18:00", tomorrowSunrise: "06:00" }
         }
         root.tick(false)
+        // A newer location arrived mid-flight — refetch with it.
+        if (root.sunFetchPending) {
+          root.sunFetchPending = false
+          root.fetchSun()
+          return
+        }
+        // Keep stale defaults only briefly: retry failed fetches a few times.
+        if (!parsed) root.scheduleSunRetry()
       }
     }
+  }
+
+  property int sunRetries: 0
+
+  function scheduleSunRetry() {
+    if (root.sunRetries >= 4) return
+    root.sunRetries++
+    sunRetryTimer.restart()
+  }
+
+  Timer {
+    id: sunRetryTimer
+    interval: 10000
+    onTriggered: root.fetchSun()
   }
 
   // ---- scheduling tick ------------------------------------------------------
