@@ -27,7 +27,7 @@ wallpaper to each period** so it survives manual theme switches.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/xiaowei2479/omarchy-background-lock.git --enable
+omarchy plugin add https://github.com/xiaowei2479-crypto/omarchy-background-lock.git --enable
 ```
 
 Then place the widget where you like it:
